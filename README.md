@@ -63,6 +63,6 @@ To edit the database, either use a SQLite server such as [DB Browser for SQLite]
 # TODOs
 
 - 修正中古音韻混亂（真臻諄、庚清）
-- 異體字支持 (例如窗-窻、爲-為)
+- 異體字支持（例如窗窻、爲為）
 - 添加推導白讀與新文讀的規則
 - 在 `FGSyllable` 中加入音系限制

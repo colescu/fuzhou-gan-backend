@@ -164,6 +164,8 @@ def 推導介音(
                 case "見":
                     if 聲母 == "疑" and 攝 == "果":  # 爲修正 訛臥
                         return ""
+                    if 攝 == "果" and 等 == "三":  # 爲修正 瘸
+                        return "j"
                     if 韻腹 in "aɛ" or 韻 in list("io"):  # 假果止蟹
                         return "w"
                     if 攝 == "宕":
@@ -180,7 +182,9 @@ def 推導介音(
                                 return ""
                             case "三":
                                 return "ɥ" if 韻腹 not in list("uy") else ""
-                    return ""  # 梗曾 字少
+                    if 攝 == "梗" and 等 in "三四":  # 梗曾 字少
+                        return "j"
+                    return ""
                 case "影":
                     match 等:
                         case "一" | "二":

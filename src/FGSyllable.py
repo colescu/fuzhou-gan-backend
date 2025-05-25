@@ -18,7 +18,7 @@ class FGSyllable:
     initial: str
     medial: str
     nucleus: str
-    coda: str
+    final: str
     tone: str
 
     IPA_TO_PINYIN_MAP = {
@@ -58,7 +58,7 @@ class FGSyllable:
             "u": "u",
             "y": "y",
         },
-        "coda": {
+        "final": {
             "": "",
             "m": "m",
             "n": "n",
@@ -88,14 +88,33 @@ class FGSyllable:
         "8": {"name": "陽入", "numeral": "5", "letter": "˥", "diacritic": "̂"},
     }
 
+    _DIACRITIC_TO_TONE_MAP = {
+        info["diacritic"]: tone
+        for tone, info in TONE_NOTATION_MAP.items()
+        if tone in "1235"
+    }
+
+    @property
+    def tuple(self) -> tuple[str, str, str, str, str]:
+        return self.initial, self.medial, self.nucleus, self.final, self.tone
+
+    @property
+    def rhyme(self) -> str:
+        return self.medial + self.nucleus + self.final
+
     @property
     def is_syllabic_nasal(self) -> bool:
         # only syllabic ŋ is allowed
-        return (self.initial, self.medial, self.nucleus, self.coda) == ("ŋ", "", "", "")
+        return (self.initial, self.medial, self.nucleus, self.final) == (
+            "ŋ",
+            "",
+            "",
+            "",
+        )
 
     @property
     def is_checked_tone(self) -> bool:
-        return self.coda in list("ptkʔ")
+        return self.final in list("ptkʔ")
 
     def __post_init__(self):
         """
@@ -106,7 +125,7 @@ class FGSyllable:
         """
 
         if not self.is_syllabic_nasal:
-            for part in ["initial", "medial", "nucleus", "coda"]:
+            for part in ["initial", "medial", "nucleus", "final"]:
                 if getattr(self, part) not in FGSyllable.IPA_TO_PINYIN_MAP[part]:
                     raise ValueError(
                         f"Illegal {part} in Fuzhou Gan syllable {self.ipa_raw}: {getattr(self, part)}."
@@ -121,10 +140,6 @@ class FGSyllable:
             )
 
     @property
-    def tuple(self) -> tuple[str, str, str, str, str]:
-        return self.initial, self.medial, self.nucleus, self.coda, self.tone
-
-    @property
     def ipa_raw(self) -> str:
         return "".join(self.tuple)
 
@@ -132,8 +147,8 @@ class FGSyllable:
     def pinyin(self) -> str:
         """
         Examples:
-            FGSyllable("tɕʰ", "j", "a", "ŋ", "3") -> qiâng
-            FGSyllable("ŋ", "", "", "", "2") -> ńg
+            FGSyllable("tɕʰ", "j", "a", "ŋ", "3") -> "qiâng"
+            FGSyllable("ŋ", "", "", "", "2") -> "ńg"
         """
 
         if self.is_syllabic_nasal:
@@ -153,7 +168,7 @@ class FGSyllable:
                     FGSyllable.IPA_TO_PINYIN_MAP["nucleus"][self.nucleus]
                     + FGSyllable.TONE_NOTATION_MAP[self.tone]["diacritic"],
                 ),
-                FGSyllable.IPA_TO_PINYIN_MAP["coda"][self.coda],
+                FGSyllable.IPA_TO_PINYIN_MAP["final"][self.final],
             ]
         )
 
@@ -181,10 +196,11 @@ class FGSyllable:
                     return tuple(rhyme)
                 case 2:
                     if rhyme[1] in FGSyllable.IPA_TO_PINYIN_MAP[
-                        "coda"
+                        "final"
                     ] and rhyme not in [
                         "ju",
                         "wi",
+                        "ɥi",
                     ]:
                         return "", *tuple(rhyme)
                     else:
@@ -193,11 +209,11 @@ class FGSyllable:
                     return "", *tuple(rhyme), ""
             return "", rhyme, ""
 
-        medial, nucleus, coda = parse_rhyme(text[initial_length:-1])
+        medial, nucleus, final = parse_rhyme(text[initial_length:-1])
 
         tone = text[-1]
 
-        return FGSyllable(initial, medial, nucleus, coda, tone)
+        return FGSyllable(initial, medial, nucleus, final, tone)
 
     @classmethod
     def parse_pinyin(cls, text: str) -> "FGSyllable":
@@ -214,21 +230,15 @@ class FGSyllable:
             "qiāng6" -> FGSyllable("tɕʰ", "j", "a", "ŋ", "6")
         """
 
-        def diacritic_to_tone(char: str) -> str:
-            for tone in "1235":
-                if char == FGSyllable.TONE_NOTATION_MAP[tone]["diacritic"]:
-                    return tone
-            return ""
-
         text = normalize("NFKD", text)
         tone = "0"
         for i in range(len(text)):
-            tmp = diacritic_to_tone(text[i])
+            tmp = FGSyllable._DIACRITIC_TO_TONE_MAP.get(text[i], "")
             if tmp != "":
                 tone = tmp
                 text = text[:i] + text[i + 1 :]
                 break
-        if text[-1].isnumeric():
+        if text[-1].isdigit():
             tone = text[-1]
             text = text[:-1]
 
@@ -246,7 +256,7 @@ class FGSyllable:
                     return [rhyme[0], rhyme[1], rhyme[2:]]
                 case 2:
                     if rhyme[1:] in FGSyllable.PINYIN_TO_IPA_MAP[
-                        "coda"
+                        "final"
                     ] and rhyme not in [
                         "iu",
                         "ui",
@@ -258,22 +268,22 @@ class FGSyllable:
                     return ["", rhyme, ""]
             return ["", rhyme, ""]
 
-        medial, nucleus, coda = parse_rhyme(rhyme)
+        medial, nucleus, final = parse_rhyme(rhyme)
 
         # repetitive!
         initial = FGSyllable.PINYIN_TO_IPA_MAP["initial"].get(initial, initial)
         medial = FGSyllable.PINYIN_TO_IPA_MAP["medial"].get(medial, medial)
         nucleus = FGSyllable.PINYIN_TO_IPA_MAP["nucleus"].get(nucleus, nucleus)
-        coda = FGSyllable.PINYIN_TO_IPA_MAP["coda"].get(coda, coda)
+        final = FGSyllable.PINYIN_TO_IPA_MAP["final"].get(final, final)
 
         if nucleus == "ɿ" and not (medial == "" and initial in ["ts", "tsʰ", "s", "l"]):
             nucleus = "i"
 
-        if coda in list("ptkʔ"):
+        if final in list("ptkʔ"):
             match tone:
                 case "1":
                     tone = "7"
                 case "3":
                     tone = "8"
 
-        return FGSyllable(initial, medial, nucleus, coda, tone)
+        return FGSyllable(initial, medial, nucleus, final, tone)

@@ -295,7 +295,7 @@ class Updater:
                     FG_syllable.initial,
                     FG_syllable.medial,
                     FG_syllable.nucleus,
-                    FG_syllable.coda,
+                    FG_syllable.final,
                     choice,
                 )
 
