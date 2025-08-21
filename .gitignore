@@ -3,7 +3,9 @@ __pycache__/
 
 .vscode/
 
+ignore/
+scripts/__*
 **/*.sqbpro
-**/__*
-
-src/*.ipynb
+**/setup.py
+**/*.egg-info/
+update.bat

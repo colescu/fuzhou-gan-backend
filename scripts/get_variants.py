@@ -76,6 +76,17 @@ class UnionFind:
         return list(group_map.values())
 
 
+with open("data/chars_freq.txt", "r", encoding="utf-8") as f:
+    CHARACTERS = f.read()
+
+
+def freq(char: str) -> int:
+    try:
+        return CHARACTERS.index(char)
+    except Exception:
+        return len(CHARACTERS)
+
+
 def fetch_variants() -> None:
     OpenCC_T2S = fetch_OpenCC("TS")
     OpenCC_S2T = fetch_OpenCC("ST")
@@ -87,10 +98,13 @@ def fetch_variants() -> None:
             for i in range(1, len(row)):
                 uf.union(row[0], row[i])
 
-    groups = sorted(["".join(sorted(group)) for group in uf.groups])
+    # sort by frequency
+    groups = sorted(["".join(sorted(group, key=freq)) for group in uf.groups], key=freq)
 
     with open(DATA_PATH / "variants.txt", "w", encoding="utf-8") as file:
         file.write("\n".join(groups))
+
+    print("抓取簡繁轉換與異體字數據完成！")
 
 
 if __name__ == "__main__":

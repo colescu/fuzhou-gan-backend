@@ -1,41 +1,81 @@
 """
-This file defines the `Updater` class to facilitate the updating of
-the Fuzhou Gan database.
+This file defines the `Updater` class for the hanzi database.
 """
 
 import sqlite3
-import csv
 from collections import defaultdict
 from functools import cached_property
+from typing import Any
 from pathlib import Path
 
 import questionary
 
 from 推導撫州話 import 推導撫州話
-from FGSyllable import FGSyllable
+from 推導梅縣話 import 推導梅縣話
+from phonology import LANGUAGE_MAP, FGSyllable
 
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data"
 
 
+REFLEX_GETTER_MAP = {
+    "FG": 推導撫州話,
+    "MH": 推導梅縣話,
+}
+
+
 class Updater:
-    def __init__(self, db_name: str = "撫州話.sqlite3", get_reflex=推導撫州話):
+    def __init__(
+        self,
+        db_name: str = "hanzi.sqlite3",
+        lang_en: str = "FG",
+    ):
         self.conn = sqlite3.connect(DATA_PATH / db_name)
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
-        self.get_reflex = get_reflex
+        self.lang_cn = LANGUAGE_MAP[lang_en]["name"]
+        self.Syllable = LANGUAGE_MAP[lang_en]["syllable_cls"]
+        self.get_reflex = REFLEX_GETTER_MAP.get(lang_en, None)
 
     def __del__(self):
         self.conn.commit()
         self.conn.close()
 
     @property
-    def data(self) -> list[dict[str, any]]:
+    def data(self) -> list[dict[str, Any]]:
+        """查詢結果"""
         return [dict(row) for row in self.cursor.fetchall()]
 
     @cached_property
-    def dictionary(self) -> dict[str, list[dict[str, any]]]:
-        """切韻字典"""
+    def syllables(self) -> dict[int, dict[str, Any]]:
+        """廣韻小韻數據"""
+        self.cursor.execute("SELECT * FROM 小韻全;")
+        syllables = {}
+        for row in self.data:
+            syllables[row["小韻號"]] = row
+        return syllables
+
+    def get_dictionary(self, language: str = "") -> dict[str, list[dict[str, Any]]]:
+        """現代方言字典
+
+        language: 代號或中文名
+        """
+
+        lang_cn = language
+        if language == "":
+            lang_cn = self.lang_cn
+        if language in LANGUAGE_MAP:
+            lang_cn = LANGUAGE_MAP[language]["name"]
+
+        self.cursor.execute(f"SELECT * FROM {lang_cn};")
+        dictionary = defaultdict(list)
+        for row in self.data:
+            dictionary[row["字頭"]].append(row)
+        return dictionary
+
+    @cached_property
+    def MC_dictionary(self) -> dict[str, list[dict[str, Any]]]:
+        """廣韻字典"""
         self.cursor.execute("SELECT * FROM 字頭全;")
         dictionary = defaultdict(list)
         for row in self.data:
@@ -43,71 +83,69 @@ class Updater:
         return dictionary
 
     @staticmethod
-    def show_FG_syllable(
-        syllable_data: dict[str, str], include_tone: bool = True
-    ) -> str:
-        syllable = (
-            syllable_data["聲母"]
-            + syllable_data["介音"]
-            + syllable_data["韻腹"]
-            + syllable_data["韻尾"]
-        )
-        if include_tone:
-            return syllable + syllable_data["聲調"]
-        else:
-            return syllable
-
-    @staticmethod
-    def show_MC_entry(entry: dict[str, any]) -> str:
-        return " ".join(
+    def show_syllable(row: dict[str, str], include_tone: bool = True) -> str:
+        return "".join(
             [
-                entry["字頭"],
-                str(entry["字頭號"]),
-                entry["音韻地位"],
-                entry["推導撫州話"],
-                entry["釋義"],
+                row["聲母"],
+                row["介音"],
+                row["韻腹"],
+                row["韻尾"],
+                row.get("聲調", "") if include_tone else "",
             ]
         )
 
-    def export(self, filename: str = "dictionary") -> None:
-        self.cursor.execute("SELECT * FROM 導出;")
-        columns = [description[0] for description in self.cursor.description]
-        with open(
-            DATA_PATH / f"{filename}.csv", mode="w", newline="", encoding="utf-8"
-        ) as file:
-            writer = csv.DictWriter(file, fieldnames=columns)
-            writer.writeheader()
-            for row in self.data:
-                writer.writerow(dict(row))
-        print("導出完成！")
+    def show_MC_entry(self, entry: dict[str, Any]) -> str:
+        return " ".join(
+            [
+                entry["字頭"],
+                str(entry["小韻號"]),
+                entry["音韻地位"],
+                entry[f"推導{self.lang_cn}"],
+                entry["釋義"] or "",
+            ]
+        )
 
-    def update_reflexes(self) -> None:
-        """推導所有小韻的撫州話"""
+    def update_reflex(self) -> None:
+        """推導所有小韻的現代音"""
+
+        if self.get_reflex is None:
+            raise Exception("暫不支持從中古音推導該方言。")
+
         self.cursor.execute("SELECT * FROM 小韻全;")
-        count = 0
+        updated = []
         for row in self.data:
-            expected_reflex = Updater.show_FG_syllable(self.get_reflex(row))
+            expected_reflex = self.Syllable.parse_ipa(
+                Updater.show_syllable(self.get_reflex(row))
+            ).pinyin()
             self.cursor.execute(
-                "UPDATE 小韻 SET 推導撫州話 = ? WHERE 小韻號 = ?;",
+                f"UPDATE 小韻 SET 推導{self.lang_cn} = ? WHERE 小韻號 = ?;",
                 (expected_reflex, row["小韻號"]),
             )
-            if row["推導撫州話"] != expected_reflex:
-                count += 1
-        print(f"推導撫州話完成！共更新 {count} 個小韻。")
+            if expected_reflex != row[f"推導{self.lang_cn}"]:
+                updated.append(
+                    f"{row['小韻號']} {row['字']}: {row[f'推導{self.lang_cn}']} -> {expected_reflex}"
+                )
+        print(f"推導{self.lang_cn}完成！共更新 {len(updated)} 個小韻。")
+        for item in updated:
+            print("  " + item)
         self.__dict__.pop("dictionary", None)  # dictionary needs update
 
     def compare_inventories(self) -> None:
         """比較推導音節集與記錄音節集（不計聲調）"""
 
-        self.cursor.execute("SELECT * FROM 小韻全;")
+        self.cursor.execute(
+            f"SELECT * FROM 小韻全 WHERE 推導{self.lang_cn} IS NOT NULL;"
+        )
         推導音節 = set()
         for row in self.data:
-            推導音節.add(row["推導撫州話"][:-1])  # 除去聲調
+            推導音 = row[f"推導{self.lang_cn}"]
+            推導音 = 推導音[:-1] if 推導音[-1].isdigit() else 推導音  # 除去聲調
+            推導音節.add(推導音)
 
-        self.cursor.execute("SELECT * FROM 撫州話;")
+        self.cursor.execute(f"SELECT * FROM {self.lang_cn};")
         收錄音節 = set()
         for row in self.data:
-            收錄音節.add(Updater.show_FG_syllable(row, include_tone=False))
+            收錄音節.add(row["讀音"][:-1])
 
         def show_set(s: set[str]) -> str:
             return ", ".join(sorted(s))
@@ -115,56 +153,78 @@ class Updater:
         print(
             "\n".join(
                 [
-                    f"推導音節數：{len(推導音節)} ；收錄音節數：{len(收錄音節)}",
+                    f"推導音節數：{len(推導音節)} ；收錄音節數：{len(收錄音節)} （不計聲調）",
                     f"推導出但不存在的音節：{show_set(推導音節.difference(收錄音節))}",
                     f"存在但推導不出的音節：{show_set(收錄音節.difference(推導音節))}",
                 ]
             )
         )
 
-    def _predict_MC(self, row: dict[str, any]) -> list[dict[str, any]]:
-        """推導撫州話字條的切韻字頭號"""
+    def _predict_MC(self, row: dict[str, Any]) -> list[dict[str, Any]]:
+        """推導字條的廣韻字頭號"""
 
         def is_match(推導音: str, 收錄音: str) -> bool:
-            return (int(推導音[-1]) + 1) // 2 == (int(收錄音[-1]) + 1) // 2
+            return (
+                self.Syllable.parse_pinyin(推導音).MC_tone
+                == self.Syllable.parse_pinyin(收錄音).MC_tone
+            )
 
         字 = row["字頭"]
-        收錄撫州話 = Updater.show_FG_syllable(row)
+        收錄音 = row["讀音"]
 
-        entries = self.dictionary[字]
+        entries = [
+            entry
+            for entry in self.MC_dictionary[字]
+            if entry["小韻號"] in self.syllables
+        ]
         if len(entries) == 1:
             return entries
 
         exact_matches = [
-            entry for entry in entries if entry["推導撫州話"] == 收錄撫州話
+            entry for entry in entries if entry[f"推導{self.lang_cn}"] == 收錄音
         ]
         if len(exact_matches) > 0:
             return exact_matches
 
-        matches = [
-            entry for entry in entries if is_match(entry["推導撫州話"], 收錄撫州話)
-        ]
-        if len(matches) > 0:
-            return matches
+        if self.lang_cn not in ["日本語", "朝鮮語"]:
+            matches = [
+                entry
+                for entry in entries
+                if is_match(entry[f"推導{self.lang_cn}"], 收錄音)
+            ]
+            if len(matches) > 0:
+                return matches
 
         return entries
 
     def update_MC_index(self) -> None:
-        """推導所有撫州話字條的切韻字頭號"""
-        self.cursor.execute("SELECT ROWID, * FROM 撫州話 WHERE 訓作 IS NULL;")
-        count = 0
-        for row in self.data:
-            MC_entries = self._predict_MC(row)
-            if len(MC_entries) == 1 and MC_entries[0]["字頭號"] != row["字頭號"]:
-                self.cursor.execute(
-                    "UPDATE 撫州話 SET 字頭號 = ? WHERE ROWID = ?;",
-                    (MC_entries[0]["字頭號"], row["rowid"]),
-                )
-                count += 1
-        print(f"推導撫州話字頭號完成！共更新 {count} 個字條。")
+        """推導所有字條的廣韻字頭號（慎用）"""
 
-    def add_MC_index(self, 字: str) -> tuple[bool, str]:
-        """手動選擇撫州話字條的切韻字頭號"""
+        self.cursor.execute(f"SELECT ROWID, * FROM {self.lang_cn};")
+        updated = []
+        for row in self.data:
+            if self.lang_cn == "撫州話" and row["訓作"] is not None:
+                continue
+            MC_entries = self._predict_MC(row)
+            if row["小韻號"] is None and len(MC_entries) == 1:
+                self.cursor.execute(
+                    f"UPDATE {self.lang_cn} SET 小韻號 = ? WHERE ROWID = ?;",
+                    (MC_entries[0]["小韻號"], row["rowid"]),
+                )
+                old = self.syllables.get(row["小韻號"], None)
+                old_info = f"{old['字']} {old['音韻地位']}" if old else "None"
+                new = self.syllables[MC_entries[0]["小韻號"]]
+                updated.append(
+                    f"{row['字頭']} {row['讀音']}: {old_info} -> {new['字']} {new['音韻地位']}"
+                )
+        print(f"推導{self.lang_cn}小韻號完成！共更新 {len(updated)} 個字條。")
+        for item in updated:
+            print("  " + item)
+
+    """以下專爲撫州話"""
+
+    def add_MC_index(self, 字: str) -> None:
+        """手動選擇撫州話字條的廣韻小韻號"""
 
         self.cursor.execute("SELECT ROWID, * FROM 撫州話 WHERE 字頭 = ?;", (字,))
         data = self.data
@@ -175,15 +235,15 @@ class Updater:
         unsure = False
         updated = False
         for row in data:
-            if row["字頭號"] is not None:
+            if row["小韻號"] is not None:
                 continue
 
-            print(f"{字} 收錄音：{Updater.show_FG_syllable(row)}")
+            print(f"{字} 收錄音：{Updater.show_syllable(row)}")
 
             entries = self._predict_MC(row)
             if len(entries) == 0:
-                print("切韻未收錄該字！")
-                return False, "切韻未收錄"
+                print("廣韻未收錄該字！")
+                return False, "廣韻未收錄"
 
             choice = questionary.select(
                 "請選擇：",
@@ -196,39 +256,36 @@ class Updater:
             if choice is None:
                 raise KeyboardInterrupt
 
-            if "字頭號" in choice:
+            if "小韻號" in choice:
                 self.cursor.execute(
-                    "UPDATE 撫州話 SET 字頭號 = ? WHERE ROWID = ?;",
-                    (choice["字頭號"], row["rowid"]),
+                    "UPDATE 撫州話 SET 小韻號 = ? WHERE ROWID = ?;",
+                    (choice["小韻號"], row["rowid"]),
                 )
                 updated = True
             else:
                 unsure = True
 
-        return updated, "不確定" if unsure else "已添加切韻字頭號"
+        return updated, "不確定" if unsure else "已添加小韻號"
 
-    def add_entry(self, 字: str) -> tuple[bool, str]:
+    def add_entry(self, 字: str) -> None:
         """手動錄入撫州話字條"""
 
         self.cursor.execute("SELECT * FROM 撫州話 WHERE 字頭 = ?;", (字,))
         data = self.data
         if len(data) != 0:
-            print(
-                "已收錄讀音："
-                + ", ".join(Updater.show_FG_syllable(row) for row in data)
-            )
+            print("已收錄讀音：" + ", ".join(row["讀音"] for row in data))
             if not questionary.confirm("是否要錄入讀音？", default=False).ask():
                 return False, "用戶終止"
 
         MC_index = None
         FG_syllable = None
 
-        entries = self.dictionary[字]
+        entries = self.MC_dictionary[字]
         if len(entries) > 0:
             choice = questionary.select(
-                "請選擇切韻字條：",
+                "請選擇廣韻字條：",
                 choices=[
-                    {"name": Updater.show_MC_entry(entry), "value": entry}
+                    {"name": self.show_MC_entry(entry), "value": entry}
                     for entry in entries
                 ]
                 + [{"name": "以上都不是 / 不確定", "value": {}}],
@@ -236,11 +293,11 @@ class Updater:
             if choice is None:
                 raise KeyboardInterrupt
 
-            if "字頭號" in choice:
-                MC_index = choice["字頭號"]
+            if "小韻號" in choice:
+                MC_index = choice["小韻號"]
 
                 if questionary.confirm("是否要使用推導音？").ask():
-                    FG_syllable = FGSyllable.parse_ipa(choice["推導撫州話"])
+                    FG_syllable = FGSyllable.parse_pinyin(choice["推導撫州話"])
 
         if FG_syllable is None:
             text = input("請輸入讀音：")
@@ -261,12 +318,12 @@ class Updater:
                         "剛才輸入的是音標還是拼音？",
                         choices=[
                             {
-                                "name": f"音標 ({syllable_from_ipa.ipa_raw})",
-                                "value": syllable_from_ipa,
-                            },
-                            {
                                 "name": f"拼音 ({syllable_from_pinyin.ipa_raw})",
                                 "value": syllable_from_pinyin,
+                            },
+                            {
+                                "name": f"音標 ({syllable_from_ipa.ipa_raw})",
+                                "value": syllable_from_ipa,
                             },
                         ],
                     ).ask()
@@ -295,7 +352,7 @@ class Updater:
                     FG_syllable.initial,
                     FG_syllable.medial,
                     FG_syllable.nucleus,
-                    FG_syllable.final,
+                    FG_syllable.coda,
                     choice,
                 )
 
@@ -305,11 +362,19 @@ class Updater:
             text = input(f"{label}：").strip()
             return text or None
 
-        文白新 = 訓作 = 釋義 = None
+        層 = 訓作 = 釋義 = None
         if questionary.confirm("是否要附加信息？", default=False).ask():
-            文白新, 訓作, 釋義 = map(get_optional_input, ["文白新", "訓作", "釋義"])
+            層, 訓作, 釋義 = map(get_optional_input, ["層", "訓作", "釋義"])
 
         self.cursor.execute(
-            "INSERT INTO 撫州話 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-            (字, MC_index, *FG_syllable.tuple, 文白新, 訓作, 釋義),
+            "INSERT INTO 撫州話 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            (
+                字,
+                FG_syllable.pinyin(tone_diacritic=False),
+                *FG_syllable.tuple,
+                MC_index,
+                層,
+                訓作,
+                釋義,
+            ),
         )
